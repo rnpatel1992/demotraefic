@@ -1,0 +1,105 @@
+version: '3'
+
+services:
+  reverse-proxy:
+    image: traefik:v2.5
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Web
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Map the static configuration into the container
+      - ./config/static.yml:/etc/traefik/traefik.yml:ro
+      # Map the dynamic configuration into the container
+      - ./config/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      # Map the certificats into the container
+      - ./certs:/etc/certs:ro
+    networks:
+      - proxy
+
+  whoami:
+    image: containous/whoami
+    container_name: whoami
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      # Enable this container to be mapped by traefik
+      # For more information, see: https://docs.traefik.io/providers/docker/#exposedbydefault
+      - "traefik.enable=true"
+      # URL to reach this container
+      - "traefik.http.routers.whoami.rule=Host(`whoami.docker.localhost`)"
+      # Activation of TLS
+      - "traefik.http.routers.whoami.tls=true"
+      # If port is different than 80, use the following service:
+      # - "traefik.http.services.<service_name>.loadbalancer.server.port=<port>"
+    networks:
+      - proxy
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: nginx
+    ports:
+     - "8080:8080"
+    volumes:
+      - ./${PROJECT_FOLDER}:/var/www/html
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+
+    depends_on:
+      - php
+      - mysql
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx.rule=Host(`${HOST}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.nginx.middlewares=portainer-prefix"
+      - "traefik.http.middlewares.portainer-prefix.stripprefix.prefixes=/"
+      - "traefik.http.middlewares.portainer-prefix.stripprefix.forceslash=false"
+      
+    networks:
+      - proxy
+  
+  mysql:
+    image: mysql:5.7.22
+    container_name: dbmysql
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "3366:3306"
+    volumes:
+      - ./.database:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mysql
+
+    networks:
+      - proxy
+
+
+  php:
+    build:
+      context: .
+      dockerfile: DockerFile
+    container_name: php_lang
+    volumes:
+      - ./${PROJECT_FOLDER}:/var/www/html
+    ports:
+      - "9000:9000"
+    networks:
+      - proxy
+    links:
+      - mysql
+    depends_on:
+      - mysql
+
+networks:
+  web:
+  proxy:
+    external: true
